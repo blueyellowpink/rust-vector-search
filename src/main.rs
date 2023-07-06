@@ -342,6 +342,22 @@ fn main() {
         &mut idx_to_word_mapping,
     );
 
+    let words_to_visualize: Vec<String> = ["river", "war", "love", "education"]
+        .into_iter()
+        .map(|x| x.to_owned())
+        .collect();
+    let index_results = build_and_benchmark_index::<DIM>(
+        &my_input_data,
+        3,
+        15,
+        TOP_K,
+        &words_to_visualize,
+        &word_to_idx_mapping,
+        &idx_to_word_mapping,
+        None,
+    );
+    println!("{index_results:?}");
+
     let duration = start.elapsed();
     println!("Parsed {} vectors in {:?}", my_input_data.len(), duration);
 }
