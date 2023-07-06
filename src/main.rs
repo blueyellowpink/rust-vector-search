@@ -1,9 +1,10 @@
 use std::{
+    cmp::min,
     collections::{HashMap, HashSet},
     io::BufRead,
 };
 
-use rand::prelude::SliceRandom;
+use rand::{prelude::SliceRandom, seq::IteratorRandom};
 
 #[derive(Eq, PartialEq, Hash)]
 pub struct HashKey<const N: usize>([u32; N]);
@@ -153,6 +154,55 @@ impl<const N: usize> ANNIndex<N> {
             values: unique_vecs,
         }
     }
+
+    fn tree_result(
+        query: Vector<N>,
+        n: i32,
+        tree: &Node<N>,
+        candidates: &mut HashSet<usize>,
+    ) -> i32 {
+        // take everything in node, if still needed, take from alternate subtree
+        match tree {
+            Node::Leaf(box_leaf) => {
+                let leaf_values = &(box_leaf.0);
+                let num_candidates_found = min(n as usize, leaf_values.len());
+                for i in 0..num_candidates_found {
+                    candidates.insert(leaf_values[i]);
+                }
+                return num_candidates_found as i32;
+            }
+            Node::Inner(inner) => {
+                let above = (*inner).hyperplane.point_is_above(&query);
+                let (main, backup) = match above {
+                    true => (&(inner.right_node), &(inner.left_node)),
+                    false => (&(inner.left_node), &(inner.right_node)),
+                };
+                match Self::tree_result(query, n, main, candidates) {
+                    k if k < n => k + Self::tree_result(query, n - k, backup, candidates),
+                    k => k,
+                }
+            }
+        }
+    }
+
+    pub fn search_approximate(&self, query: Vector<N>, top_k: i32) -> Vec<(i32, f32)> {
+        let mut candidates = HashSet::new();
+        for tree in self.trees.iter() {
+            Self::tree_result(query, top_k, tree, &mut candidates);
+        }
+        let mut candidates = candidates
+            .into_iter()
+            .map(|idx| (idx, self.values[idx].sq_euc_dis(&query)))
+            .collect::<Vec<_>>();
+
+        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+        candidates
+            .into_iter()
+            .take(top_k as usize)
+            .map(|(idx, dis)| (self.ids[idx] as i32, dis))
+            .collect()
+    }
 }
 
 fn load_raw_wiki_data<const N: usize>(
@@ -184,6 +234,95 @@ fn load_raw_wiki_data<const N: usize>(
             .unwrap();
         all_data.push(Vector(embedding));
     }
+}
+
+fn build_and_benchmark_index<const N: usize>(
+    my_input_data: &[Vector<N>],
+    num_trees: i32,
+    max_node_size: i32,
+    top_k: i32,
+    words_to_visualize: &[String],
+    word_to_idx_mapping: &HashMap<String, usize>,
+    idx_to_word_mapping: &HashMap<usize, String>,
+    sample_idx: Option<&Vec<i32>>,
+) -> Vec<HashSet<i32>> {
+    println!(
+        "dimensions={}, num_trees={}, max_node_size={}, top_k={}",
+        N, num_trees, max_node_size, top_k
+    );
+    // Build the index
+    let start = std::time::Instant::now();
+    let my_ids: Vec<i32> = (0..my_input_data.len() as i32).collect();
+    let index = ANNIndex::<N>::build_index(num_trees, max_node_size, &my_input_data, &my_ids);
+    let duration = start.elapsed();
+    println!("Built ANN index in {}-D in {:?}", N, duration);
+    // Benchmark it with 1000 sequential queries
+    let benchmark_idx: Vec<i32> =
+        (0..my_input_data.len() as i32).choose_multiple(&mut rand::thread_rng(), 1000);
+    let mut search_vectors: Vec<Vector<N>> = Vec::new();
+    for idx in benchmark_idx {
+        search_vectors.push(my_input_data[idx as usize]);
+    }
+    let start = std::time::Instant::now();
+    for i in 0..1000 {
+        index.search_approximate(search_vectors[i], top_k);
+    }
+    let duration = start.elapsed() / 1000;
+    println!("Bulk ANN-search in {}-D has average time {:?}", N, duration);
+    // Visualize some words
+    for word in words_to_visualize.iter() {
+        println!("Currently visualizing {}", word);
+        let word_index = word_to_idx_mapping[word];
+        let embedding = my_input_data[word_index];
+        let nearby_idx_and_distance = index.search_approximate(embedding, top_k);
+        for &(idx, distance) in nearby_idx_and_distance.iter() {
+            println!(
+                "{}, distance={}",
+                idx_to_word_mapping[&(idx as usize)],
+                distance.sqrt()
+            );
+        }
+    }
+    // If [sample_idx] provided, only find the top_k neighbours for those
+    // and return that data. Otherwise, find it for all vectors in the
+    // corpus. When benchmarking other hyper-parameters, we use a smaller
+    // [sample_idx] set to control run-time and get efficient estimates
+    // of performance metrics.
+    let start = std::time::Instant::now();
+    let mut subset: Vec<Vector<N>> = Vec::new();
+    let sample_from_my_data = match sample_idx {
+        Some(sample_indices) => {
+            for &idx in sample_indices {
+                subset.push(my_input_data[idx as usize]);
+            }
+            &subset
+        }
+        None => my_input_data,
+    };
+    let index_results: Vec<HashSet<i32>> = sample_from_my_data
+        .iter()
+        .map(|&vector| search_approximate_as_hashset(&index, vector, top_k))
+        .collect();
+    let duration = start.elapsed();
+    println!(
+        "Collected {} quality results in {:?}",
+        index_results.len(),
+        duration
+    );
+    return index_results;
+}
+
+fn search_approximate_as_hashset<const N: usize>(
+    index: &ANNIndex<N>,
+    vector: Vector<N>,
+    top_k: i32,
+) -> HashSet<i32> {
+    let nearby_idx_and_distance = index.search_approximate(vector, top_k);
+    let mut id_hashset = std::collections::HashSet::new();
+    for &(idx, _) in nearby_idx_and_distance.iter() {
+        id_hashset.insert(idx);
+    }
+    return id_hashset;
 }
 
 fn main() {
