@@ -4,6 +4,7 @@ use std::{
 };
 
 use rand::seq::IteratorRandom;
+use rayon::prelude::*;
 
 use rust_vector_search::{vector::Vector, ANNIndex};
 
@@ -54,12 +55,14 @@ fn build_and_benchmark_index<const N: usize>(
         "dimensions={}, num_trees={}, max_node_size={}, top_k={}",
         N, num_trees, max_node_size, top_k
     );
+
     // Build the index
     let start = std::time::Instant::now();
     let my_ids: Vec<i32> = (0..my_input_data.len() as i32).collect();
     let index = ANNIndex::<N>::build_index(num_trees, max_node_size, &my_input_data, &my_ids);
     let duration = start.elapsed();
     println!("Built ANN index in {}-D in {:?}", N, duration);
+
     // Benchmark it with 1000 sequential queries
     let benchmark_idx: Vec<i32> =
         (0..my_input_data.len() as i32).choose_multiple(&mut rand::thread_rng(), num_sample);
@@ -73,6 +76,7 @@ fn build_and_benchmark_index<const N: usize>(
     }
     let duration = start.elapsed() / 1000;
     println!("Bulk ANN-search in {}-D has average time {:?}", N, duration);
+
     // Visualize some words
     for word in words_to_visualize.iter() {
         println!("Currently visualizing {}", word);
@@ -87,6 +91,7 @@ fn build_and_benchmark_index<const N: usize>(
             );
         }
     }
+
     // If [sample_idx] provided, only find the top_k neighbours for those
     // and return that data. Otherwise, find it for all vectors in the
     // corpus. When benchmarking other hyper-parameters, we use a smaller
@@ -104,7 +109,7 @@ fn build_and_benchmark_index<const N: usize>(
         None => my_input_data,
     };
     let index_results: Vec<HashSet<i32>> = sample_from_my_data
-        .iter()
+        .par_iter()
         .map(|&vector| search_approximate_as_hashset(&index, vector, top_k))
         .collect();
     let duration = start.elapsed();
@@ -113,6 +118,7 @@ fn build_and_benchmark_index<const N: usize>(
         index_results.len(),
         duration
     );
+
     return index_results;
 }
 
@@ -131,7 +137,9 @@ fn search_approximate_as_hashset<const N: usize>(
 
 fn main() {
     const DIM: usize = 300;
-    const TOP_K: i32 = 20;
+    const TOP_K: i32 = 10;
+    const NUM_TREES: i32 = 50;
+    const MAX_NODE_SIZE: i32 = 5;
 
     let start = std::time::Instant::now();
 
@@ -152,8 +160,8 @@ fn main() {
         .collect();
     let index_results = build_and_benchmark_index::<DIM>(
         &my_input_data,
-        3,
-        15,
+        NUM_TREES,
+        MAX_NODE_SIZE,
         TOP_K,
         &words_to_visualize,
         &word_to_idx_mapping,

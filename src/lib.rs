@@ -5,10 +5,11 @@ pub mod vector;
 use std::{cmp::min, collections::HashSet};
 
 use rand::prelude::SliceRandom;
+use rayon::prelude::*;
 
-use hyperplane::HyperPlane;
-use tree::{InnerNode, LeafNode, Node};
-use vector::Vector;
+use crate::hyperplane::HyperPlane;
+use crate::tree::{InnerNode, LeafNode, Node};
+use crate::vector::Vector;
 
 pub struct ANNIndex<const N: usize> {
     pub trees: Vec<Node<N>>,
@@ -84,12 +85,15 @@ impl<const N: usize> ANNIndex<N> {
     ) -> ANNIndex<N> {
         let (mut unique_vecs, mut ids) = (vec![], vec![]);
         Self::deduplicate(vecs, vec_ids, &mut unique_vecs, &mut ids);
+
         // Trees hold an index into the [unique_vecs] list which is not
         // necessarily its id, if duplicates existed
         let all_indexes: Vec<usize> = (0..unique_vecs.len()).collect();
         let trees: Vec<_> = (0..num_trees)
+            .into_par_iter()
             .map(|_| Self::build_a_tree(max_size, &all_indexes, &unique_vecs))
             .collect();
+
         ANNIndex::<N> {
             trees,
             ids,
