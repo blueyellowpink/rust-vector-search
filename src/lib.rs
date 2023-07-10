@@ -4,6 +4,7 @@ pub mod vector;
 
 use std::{cmp::min, collections::HashSet};
 
+use dashmap::DashSet;
 use rand::prelude::SliceRandom;
 use rayon::prelude::*;
 
@@ -101,12 +102,7 @@ impl<const N: usize> ANNIndex<N> {
         }
     }
 
-    fn tree_result(
-        query: Vector<N>,
-        n: i32,
-        tree: &Node<N>,
-        candidates: &mut HashSet<usize>,
-    ) -> i32 {
+    fn tree_result(query: Vector<N>, n: i32, tree: &Node<N>, candidates: &DashSet<usize>) -> i32 {
         // take everything in node, if still needed, take from alternate subtree
         match tree {
             Node::Leaf(box_leaf) => {
@@ -132,12 +128,14 @@ impl<const N: usize> ANNIndex<N> {
     }
 
     pub fn search_approximate(&self, query: Vector<N>, top_k: i32) -> Vec<(i32, f32)> {
-        let mut candidates = HashSet::new();
-        for tree in self.trees.iter() {
-            Self::tree_result(query, top_k, tree, &mut candidates);
-        }
+        let candidates = DashSet::new();
+
+        self.trees.par_iter().for_each(|tree| {
+            Self::tree_result(query, top_k, tree, &candidates);
+        });
+
         let mut candidates = candidates
-            .into_iter()
+            .into_par_iter()
             .map(|idx| (idx, self.values[idx].sq_euc_dis(&query)))
             .collect::<Vec<_>>();
 
